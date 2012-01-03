@@ -21,8 +21,11 @@ class CodeStylist:
     self.styler = None
   def printSuggestions(self, styler):
     errors = styler.getErrors()
-    for e in errors:
-      print e
+    if errors:
+      for e in errors:
+        print e
+    else:
+      print 'No errors.'
 
   def processLines(self, styler, lines):
     styler.processLines(lines)
@@ -44,8 +47,8 @@ class CodeStylist:
     factory = StylerFactory()
     self.styler = factory.get(fileExt)
     if not self.styler:
-      raise Exception('Cannot process file %s, with extension %s' % (fName,
-                                                                     fileExt))
+      raise Exception('Cannot process file %s, unsupported file extension %s' 
+                      % (fName, fileExt))
     self.processLines(self.styler, lines)
 
 class StylerFactory:
@@ -60,7 +63,7 @@ class StylerFactory:
                                                       commentBefore=True,
                                                       commentAfter=False))
       return styler
-    elif fileExt in ['*.c', '.cc', '.cpp', '.h', '.hpp']:
+    elif fileExt in ['.c', '.cc', '.cpp', '.h', '.hpp']:
       styler = Styler()
       styler.registerCheck(CheckTrailingWS())
       styler.registerCheck(CheckLineTooLong(maxLineLength = MAX_CPP_LINE_LENGTH))
