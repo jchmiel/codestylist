@@ -1,0 +1,210 @@
+#!/usr/bin/env python
+import logging, os, sys, re, time
+
+COMMENT_UNRECOGNIZED, COMMENT_ONE_LINE, COMMENT_START, COMMENT_END = range(4)
+MAX_JAVA_LINE_LENGTH = 100
+MAX_CPP_LINE_LENGTH = 80
+
+def main():
+  cs = CodeStylist()
+  if len(sys.argv[1:]) > 0:
+    fcnt = len(sys.argv[1:])
+  for fn in sys.argv[1:]:
+    if fcnt > 1:
+      print fn
+    cs.processFile(fn)
+    if fcnt > 1:
+      print
+
+class CodeStylist:
+  def __init__(self):
+    self.styler = None
+  def printSuggestions(self, styler):
+    errors = styler.getErrors()
+    for e in errors:
+      print e
+
+  def processLines(self, styler, lines):
+    styler.processLines(lines)
+    self.printSuggestions(styler)
+
+  def processFile(self, fName):
+    f = open(fName)
+    lines = []
+
+    l = f.readline()
+    lineNo = 1
+    while l:
+      lines.append( { 'text' : l, 'lineNo' : lineNo } )
+      l = f.readline()
+      lineNo += 1
+    f.close()
+
+    _, fileExt = os.path.splitext(fName)
+    factory = StylerFactory()
+    self.styler = factory.get(fileExt)
+    if not self.styler:
+      raise Exception('Cannot process file %s, with extension %s' % (fName,
+                                                                     fileExt))
+    self.processLines(self.styler, lines)
+
+class StylerFactory:
+  def get(self, fileExt):
+    if fileExt in ['.java']:
+      styler = Styler()
+      styler.registerCheck(CheckTrailingWS())
+      styler.registerCheck(CheckLineTooLong(maxLineLength = MAX_JAVA_LINE_LENGTH))
+      styler.registerCheck(CheckLineDoubleBlank())
+      styler.registerCheck(CheckComments(JavaParser()))
+      styler.registerCheck(CheckFunctionsAreCommented(JavaParser(),
+                                                      commentBefore=True,
+                                                      commentAfter=False))
+      return styler
+    elif fileExt in ['*.c', '.cc', '.cpp', '.h', '.hpp']:
+      styler = Styler()
+      styler.registerCheck(CheckTrailingWS())
+      styler.registerCheck(CheckLineTooLong(maxLineLength = MAX_CPP_LINE_LENGTH))
+      styler.registerCheck(CheckLineDoubleBlank())
+      styler.registerCheck(CheckComments(JavaParser()))
+      return styler
+    else:
+      return None
+
+class Styler:
+  def __init__(self):
+    self.checks = []
+  def registerCheck(self, check):
+    self.checks.append(check)
+  def processLines(self, lines):
+    for c in self.checks:
+      c.run(lines)
+  def getErrors(self):
+    result = []
+    for c in self.checks:
+      result.extend(c.errors)
+    return result
+
+class StyleCheck:
+  def __init__(self):
+    self.errors = []
+    self.warnings = []
+  def error(self, text, lineNo):
+    self.errors.append( {'text' : text, 'lineNo' : lineNo} )
+  def warn(self, text, lineNo):
+    self.warnings.append( {'text' : text, 'lineNo' : lineNo} )
+
+class CheckTrailingWS(StyleCheck):
+  def run(self, lines):
+    for l in lines:
+      if re.search(r'\s+\n$', l['text']):
+        self.error('Trailing whitespace', l['lineNo'])
+
+class CheckLineTooLong(StyleCheck):
+  def __init__(self, maxLineLength):
+    StyleCheck.__init__(self)
+    self.maxLineLength = maxLineLength
+  def run(self, lines):
+    for l in lines:
+      if len(l['text']) > self.maxLineLength:
+        self.error('Line too long', l['lineNo'])
+
+class CheckLineDoubleBlank(StyleCheck):
+  def isLineBlank(self, line):
+    return re.match(r'^\s+$', line) != None
+  def run(self, lines):
+    self.lastLine = None
+    for l in lines:
+      if self.lastLine and self.isLineBlank(self.lastLine['text']) and self.isLineBlank(l['text']):
+          self.error("Double blank line", l['lineNo'])
+      self.lastLine = l
+
+class CheckComments(StyleCheck):
+  def __init__(self, parser):
+    StyleCheck.__init__(self)
+    self.parser = parser
+  def onCommentBlock(self, lines):
+    if lines[-1]['type'] == COMMENT_ONE_LINE and lines[-1]['text'].endswith('.\n'):
+      pass
+    elif lines[-1]['type'] == COMMENT_END and re.match(r'.\s*\*/$',
+                                                       lines[-1]['text']):
+      pass
+    else:
+      self.error('Comment block should end with "."', lines[-1]['lineNo'])
+
+    firstWordLine = {}
+    for l in lines:
+      if re.search(r'\w', l['text']):
+        firstWordLine = l
+        break
+
+    if firstWordLine and not re.match(r'^\s*\W* [A-Z]', firstWordLine['text']):
+      self.error("First line of comment should start with a capital letter",
+                 firstWordLine['lineNo'])
+  def run(self, lines):
+    stack = []
+    for l in lines:
+      t = self.parser.getCommentType(l['text'])
+      if t in [COMMENT_START, COMMENT_ONE_LINE, COMMENT_END]:
+        stack.append( {'type' : t, 'text' : l['text'], 'lineNo' : l['lineNo']} )
+
+      if stack:
+        if t == COMMENT_END:
+          start = False
+          for element in stack:
+            if element['type'] == COMMENT_START:
+              start = True
+          if start:
+            self.onCommentBlock(stack)
+          else:
+            self.warn("Comment END without comment start", self.lineNo)
+          stack = []
+        elif t == COMMENT_UNRECOGNIZED and stack[-1]['type'] == COMMENT_ONE_LINE:
+          self.onCommentBlock(stack)
+          stack = []
+
+class CheckFunctionsAreCommented(StyleCheck):
+  def __init__(self, parser, commentBefore=True, commentAfter=False):
+    StyleCheck.__init__(self)
+    self.parser = parser
+    self.commentBefore = commentBefore
+    self.commentAfter = commentAfter
+  def run(self, lines):
+
+    for li, l in enumerate(lines):
+      if self.parser.isFunctionHeader(l['text']):
+        lineBefore = None
+        lineAfter = None
+        if li > 0:
+          lineBefore = lines[li - 1]
+        if li + 1 < len(lines):
+          lineAfter = lines[li + 1]
+
+        if self.commentBefore:
+          t = None
+          if lineBefore:
+            t = self.parser.getCommentType(lineBefore['text'])
+          if not t or t == COMMENT_UNRECOGNIZED:
+            self.error('No comment block for function (Prev Line)', l['lineNo'])
+        if self.commentAfter and lineAfter:
+          t = None
+          if lineAfter:
+            t = self.parser.getCommentType(lineAfter['text'])
+          if not t or t == COMMENT_UNRECOGNIZED:
+            self.error('No comment block for function (Next line)', l['lineNo'])
+
+class JavaParser:
+  def getCommentType(self, l):
+    if re.search(r'^\s*//', l):
+      return COMMENT_ONE_LINE
+    elif re.search(r'/\*', l):
+      return COMMENT_START
+    elif re.search(r'\*/', l):
+      return COMMENT_END
+    else:
+      return COMMENT_UNRECOGNIZED
+  def isFunctionHeader(self, l):
+    return re.match(
+        '^\s*(private|public|protected)\s+[^()]*\([^()]*\)\s*{?', l) != None
+
+if __name__ == '__main__':
+  main()
