@@ -14,7 +14,6 @@ public class StringConcatenation
 
    } // end main
 
-   // This function does nothing
    private void nocommentMethod() {
    }
 }

@@ -16,6 +16,9 @@ def main():
     if fcnt > 1:
       print
 
+def isLineBlank(line):
+  return re.match(r'^\s+$', line) != None
+
 class CodeStylist:
   def __init__(self):
     self.styler = None
@@ -23,7 +26,7 @@ class CodeStylist:
     errors = styler.getErrors()
     if errors:
       for e in errors:
-        print e
+        print "Line %4d: %s" % (e['lineNo'], e['text'])
     else:
       print 'No errors.'
 
@@ -108,16 +111,16 @@ class CheckLineTooLong(StyleCheck):
     self.maxLineLength = maxLineLength
   def run(self, lines):
     for l in lines:
-      if len(l['text']) > self.maxLineLength:
-        self.error('Line too long', l['lineNo'])
+      # +1 for \n character
+      if len(l['text']) > self.maxLineLength + 1:
+        self.error('Line has %3d characters, limit is %d' %
+                   (len(l['text']) - 1, self.maxLineLength), l['lineNo'])
 
 class CheckLineDoubleBlank(StyleCheck):
-  def isLineBlank(self, line):
-    return re.match(r'^\s+$', line) != None
   def run(self, lines):
     self.lastLine = None
     for l in lines:
-      if self.lastLine and self.isLineBlank(self.lastLine['text']) and self.isLineBlank(l['text']):
+      if self.lastLine and isLineBlank(self.lastLine['text']) and isLineBlank(l['text']):
           self.error("Double blank line", l['lineNo'])
       self.lastLine = l
 
@@ -186,7 +189,7 @@ class CheckFunctionsAreCommented(StyleCheck):
           t = None
           if lineBefore:
             t = self.parser.getCommentType(lineBefore['text'])
-          if not t or t == COMMENT_UNRECOGNIZED:
+          if (not t or t == COMMENT_UNRECOGNIZED) and isLineBlank(lineBefore['text']):
             self.error('No comment block for function (Prev Line)', l['lineNo'])
         if self.commentAfter and lineAfter:
           t = None
